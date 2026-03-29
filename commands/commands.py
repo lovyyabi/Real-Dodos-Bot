@@ -5,6 +5,8 @@ import discord
 from typing import List, Optional, Tuple
 from discord import app_commands
 from discord.ext import commands
+from discord.ui import Container, Section, TextDisplay, Thumbnail, LayoutView
+
 from utils.command_history import command_history
 
 
@@ -26,6 +28,12 @@ class CommandsCog(commands.Cog):
             lines.append(f"{idx}. {command_name}{time_part}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _build_layout_view(container: Container) -> LayoutView:
+        view = LayoutView()
+        view.add_item(container)
+        return view
+
     @app_commands.command(name="ping", description="Zeigt die Latenz und CPU-Auslastung")
     async def ping(self, interaction: discord.Interaction) -> None:
         command_history.record(interaction.user.id, "/ping")
@@ -35,14 +43,27 @@ class CommandsCog(commands.Cog):
             latency_ms = round(self.bot.latency * 1000)
             cpu_percent = psutil.cpu_percent(interval=0.1)
 
-            embed = discord.Embed(
-                title="Pong!",
-                color=discord.Color.green()
+            bot_avatar = (
+                self.bot.user.display_avatar.url
+                if self.bot.user
+                else "https://cdn.discordapp.com/embed/avatars/0.png"
             )
-            embed.add_field(name="Bot Latenz", value=f"{latency_ms}ms", inline=True)
-            embed.add_field(name="Server CPU", value=f"{cpu_percent}%", inline=True)
 
-            await interaction.response.send_message(embed=embed)
+            container = Container(
+                Section(
+                    TextDisplay("🏓 **Ping & Systemstatistiken**"),
+                    TextDisplay(f"Bot Latenz: `{latency_ms}ms`"),
+                    TextDisplay(f"Server CPU: `{cpu_percent}%`"),
+                    accessory=Thumbnail(media=bot_avatar),
+                ),
+                accent_colour=discord.Color.green().value,
+            )
+            view = self._build_layout_view(container)
+
+            await interaction.response.send_message(
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except Exception as exc:
             logging.exception("Fehler bei /ping")
             if not interaction.response.is_done():
@@ -103,20 +124,12 @@ class CommandsCog(commands.Cog):
                 else "Keine Befehle bisher"
             )
 
-            embed = discord.Embed(
-                title=f"Userinfo für {embed_subject.display_name}",
-                color=(
-                    embed_subject.color
-                    if isinstance(embed_subject, discord.Member) and embed_subject.color != discord.Color.default()
-                    else discord.Color.blue()
-                ),
-                timestamp=discord.utils.utcnow()
+            avatar_url = target_user.display_avatar.url
+            accent_colour = (
+                embed_subject.color.value
+                if isinstance(embed_subject, discord.Member) and embed_subject.color != discord.Color.default()
+                else discord.Color.blue().value
             )
-            embed.set_thumbnail(url=target_user.display_avatar.url)
-
-            embed.add_field(name="Username", value=f"`{target_user.name}`", inline=True)
-            embed.add_field(name="Anzeigename", value=f"`{embed_subject.display_name}`", inline=True)
-            embed.add_field(name="User-ID", value=f"`{target_user.id}`", inline=True)
 
             created_at_unix = int(target_user.created_at.timestamp())
             joined_at_unix = (
@@ -125,24 +138,15 @@ class CommandsCog(commands.Cog):
                 else None
             )
 
-            embed.add_field(name="Account erstellt", value=f"<t:{created_at_unix}:F>", inline=True)
-            if joined_at_unix:
-                embed.add_field(name="Server beigetreten", value=f"<t:{joined_at_unix}:F>", inline=True)
-            else:
-                embed.add_field(name="Server beigetreten", value="Unbekannt", inline=True)
-            embed.add_field(name="Bot", value="Ja" if target_user.bot else "Nein", inline=True)
-
             nickname_value = (
                 f"`{target_member.nick}`" if target_member and target_member.nick else "Keiner"
             )
-            embed.add_field(name="Nickname", value=nickname_value, inline=True)
 
             highest_role = (
                 target_member.top_role.mention
                 if target_member and target_member.top_role and target_member.top_role.name != "@everyone"
                 else "Keine"
             )
-            embed.add_field(name="Höchste Rolle", value=highest_role, inline=True)
 
             roles = []
             if target_member:
@@ -151,14 +155,30 @@ class CommandsCog(commands.Cog):
             roles_text = ", ".join(roles) if roles else "Keine"
             if len(roles_text) > 1024:
                 roles_text = roles_text[:1021] + "..."
-            embed.add_field(name=f"Rollen ({len(roles)})", value=roles_text, inline=False)
 
-            embed.add_field(name="Letzte 5 Befehle", value=f"```{commands_text}```", inline=False)
-
-            embed.set_footer(text=f"Angefragt von {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+            container = Container(
+                Section(
+                    TextDisplay(f"**Userinfo für {embed_subject.display_name}**"),
+                    TextDisplay(f"Username: `{target_user.name}`"),
+                    TextDisplay(f"User-ID: `{target_user.id}`"),
+                    accessory=Thumbnail(media=avatar_url),
+                ),
+                TextDisplay(
+                    f"Account erstellt: <t:{created_at_unix}:F>\n"
+                    f"Server beigetreten: {f'<t:{joined_at_unix}:F>' if joined_at_unix else 'Unbekannt'}\n"
+                    f"Bot: {'Ja' if target_user.bot else 'Nein'}"
+                ),
+                TextDisplay(
+                    f"Nickname: {nickname_value} | Höchste Rolle: {highest_role}"
+                ),
+                TextDisplay(f"Rollen ({len(roles)}): {roles_text}"),
+                TextDisplay(f"Letzte 5 Befehle:\n```{commands_text}```"),
+                accent_colour=accent_colour,
+            )
+            view = self._build_layout_view(container)
 
             await interaction.response.send_message(
-                embed=embed,
+                view=view,
                 allowed_mentions=discord.AllowedMentions.none()
             )
         except Exception as exc:
@@ -188,21 +208,29 @@ class CommandsCog(commands.Cog):
         new_members_30 = self.db.get_new_member_count(guild.id, days=30)
         total_commands = self.db.get_total_commands(guild.id)
 
-        embed = discord.Embed(
-            title=f"Server-Statistiken – {guild.name}",
-            color=discord.Color.teal(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.add_field(name="Mitglieder online", value=str(online_members), inline=True)
-        embed.add_field(name="Mitglieder gesamt", value=str(total_members), inline=True)
-        embed.add_field(name="Neue Mitglieder (30 Tage)", value=str(new_members_30), inline=True)
-        embed.add_field(name="Befehle gesamt", value=str(total_commands), inline=True)
-        embed.set_footer(
-            text=f"Angefragt von {interaction.user.display_name}",
-            icon_url=interaction.user.display_avatar.url
-        )
+        guild_icon = guild.icon.url if guild.icon else "https://cdn.discordapp.com/embed/avatars/0.png"
+        now_unix = int(discord.utils.utcnow().timestamp())
 
-        await interaction.response.send_message(embed=embed)
+        container = Container(
+            Section(
+                TextDisplay(f"**Server-Statistiken – {guild.name}**"),
+                TextDisplay(f"Mitglieder online: **{online_members}**"),
+                TextDisplay(f"Mitglieder gesamt: **{total_members}**"),
+                accessory=Thumbnail(media=guild_icon),
+            ),
+            TextDisplay(f"Neue Mitglieder (30 Tage): **{new_members_30}**"),
+            TextDisplay(f"Befehle gesamt: **{total_commands}**"),
+            TextDisplay(
+                f"Aktualisiert: <t:{now_unix}:t> – Angefragt von {interaction.user.display_name}"
+            ),
+            accent_colour=discord.Color.teal().value,
+        )
+        view = self._build_layout_view(container)
+
+        await interaction.response.send_message(
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
