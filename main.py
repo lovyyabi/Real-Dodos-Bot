@@ -4,10 +4,14 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from config import BotConfig, CONFIG
+
 load_dotenv()
 
 class DodosBot(commands.Bot):
-    def __init__(self) -> None:
+    def __init__(self, config: BotConfig) -> None:
+        self.config = config
+
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
@@ -19,6 +23,7 @@ class DodosBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.load_extension("commands.commands")
+        await self.load_extension("events.listeners")
         await self.tree.sync()
         print("Slash-Commands synchronisiert!")
 
@@ -27,7 +32,8 @@ class DodosBot(commands.Bot):
         print("------")
 
 async def main() -> None:
-    bot = DodosBot()
+    bot = DodosBot(CONFIG)
+
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise ValueError("BOT_TOKEN nicht in .env gefunden!")
