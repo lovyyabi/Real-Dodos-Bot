@@ -8,6 +8,8 @@ env/
 venv/
 .venv/
 pip-log.txt
+data/
+*.db
 
 # Environment
 .env

@@ -1,18 +1,35 @@
 import logging
+from datetime import datetime
 import psutil
 import discord
-from typing import Optional
+from typing import List, Optional, Tuple
 from discord import app_commands
 from discord.ext import commands
 from utils.command_history import command_history
 
+
 class CommandsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.db = bot.db
+
+    @staticmethod
+    def _format_history(entries: List[Tuple[str, str]]) -> str:
+        lines = []
+        for idx, (command_name, timestamp) in enumerate(entries, start=1):
+            unix_ts = None
+            try:
+                unix_ts = int(datetime.fromisoformat(timestamp).timestamp())
+            except ValueError:
+                pass
+            time_part = f" – <t:{unix_ts}:R>" if unix_ts else ""
+            lines.append(f"{idx}. {command_name}{time_part}")
+        return "\n".join(lines)
 
     @app_commands.command(name="ping", description="Zeigt die Latenz und CPU-Auslastung")
     async def ping(self, interaction: discord.Interaction) -> None:
         command_history.record(interaction.user.id, "/ping")
+        self.db.log_command(interaction.user.id, "/ping", interaction.guild_id)
 
         try:
             latency_ms = round(self.bot.latency * 1000)
@@ -42,6 +59,7 @@ class CommandsCog(commands.Cog):
         user: Optional[discord.User] = None,
     ) -> None:
         command_history.record(interaction.user.id, "/userinfo")
+        self.db.log_command(interaction.user.id, "/userinfo", interaction.guild_id)
 
         if interaction.guild is None:
             await interaction.response.send_message(
@@ -74,10 +92,16 @@ class CommandsCog(commands.Cog):
 
             embed_subject = target_member or target_user
 
-            last_commands = command_history.get_last_commands(target_user.id, 5)
-            commands_text = "\n".join(
-                f"{i+1}. {cmd}" for i, cmd in enumerate(last_commands)
-            ) if last_commands else "Keine Befehle bisher"
+            history_entries = self.db.get_last_commands_for_user(
+                target_user.id,
+                limit=5,
+                guild_id=guild.id,
+            )
+            commands_text = (
+                self._format_history(history_entries)
+                if history_entries
+                else "Keine Befehle bisher"
+            )
 
             embed = discord.Embed(
                 title=f"Userinfo für {embed_subject.display_name}",
@@ -144,6 +168,41 @@ class CommandsCog(commands.Cog):
                     "Beim Abrufen der Userinfo ist ein Fehler aufgetreten.",
                     ephemeral=True
                 )
+
+    @app_commands.command(name="stats", description="Zeigt Server-Statistiken")
+    async def stats(self, interaction: discord.Interaction) -> None:
+        command_history.record(interaction.user.id, "/stats")
+        self.db.log_command(interaction.user.id, "/stats", interaction.guild_id)
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Dieser Command funktioniert nur auf Servern.",
+                ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+
+        total_members = self.db.get_total_members_all_time(guild.id)
+        online_members = sum(1 for member in guild.members if member.status != discord.Status.offline)
+        new_members_30 = self.db.get_new_member_count(guild.id, days=30)
+        total_commands = self.db.get_total_commands(guild.id)
+
+        embed = discord.Embed(
+            title=f"Server-Statistiken – {guild.name}",
+            color=discord.Color.teal(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Mitglieder online", value=str(online_members), inline=True)
+        embed.add_field(name="Mitglieder gesamt", value=str(total_members), inline=True)
+        embed.add_field(name="Neue Mitglieder (30 Tage)", value=str(new_members_30), inline=True)
+        embed.add_field(name="Befehle gesamt", value=str(total_commands), inline=True)
+        embed.set_footer(
+            text=f"Angefragt von {interaction.user.display_name}",
+            icon_url=interaction.user.display_avatar.url
+        )
+
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

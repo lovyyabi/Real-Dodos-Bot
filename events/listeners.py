@@ -1,13 +1,12 @@
 import logging
 from typing import Optional
-
 import discord
 from discord.ext import commands
-
 
 class EventListeners(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.db = bot.db
 
     def _get_text_channel(self, channel_id: Optional[int]) -> Optional[discord.TextChannel]:
         if not channel_id:
@@ -19,15 +18,29 @@ class EventListeners(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
+        is_new = self.db.record_member_join(
+            guild_id=member.guild.id,
+            user_id=member.id,
+            joined_at=member.joined_at,
+        )
+
         channel_id = getattr(self.bot.config, "welcome_channel_id", None)
         channel = self._get_text_channel(channel_id)
         if channel is None:
             logging.debug("Willkommenskanal nicht gesetzt oder nicht gefunden; überspringe Nachricht.")
             return
 
+        description = (
+            f"Hey {member.mention}, willkommen auf **{member.guild.name}**!"
+        )
+        if is_new:
+            description += "\nDies ist dein erster Besuch hier!"
+        else:
+            description += "\nSchön, dass du wieder da bist!"
+
         embed = discord.Embed(
             title="Willkommen!",
-            description=f"Hey {member.mention}, willkommen auf **{member.guild.name}**!",
+            description=description,
             color=discord.Color.blurple(),
         )
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -38,6 +51,10 @@ class EventListeners(commands.Cog):
             await channel.send(embed=embed)
         except Exception:
             logging.exception("Fehler beim Versenden der Willkommensnachricht")
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        self.db.record_member_leave(member.guild.id, member.id)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
@@ -60,9 +77,9 @@ class EventListeners(commands.Cog):
 
         description_lines = []
         if added_roles:
-            description_lines.append(f"➕ Hinzugefügt: {', '.join(added_roles)}")
+            description_lines.append(f"Hinzugefügt: {', '.join(added_roles)}")
         if removed_roles:
-            description_lines.append(f"➖ Entfernt: {', '.join(removed_roles)}")
+            description_lines.append(f"Entfernt: {', '.join(removed_roles)}")
 
         embed = discord.Embed(
             title="Rollenaktualisierung",
